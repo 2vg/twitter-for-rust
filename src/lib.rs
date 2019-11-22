@@ -1,41 +1,19 @@
 extern crate base64;
 extern crate crypto;
-extern crate hyper;
-extern crate hyper_native_tls;
+extern crate ureq;
 extern crate rand;
 extern crate serde_json;
 extern crate time;
 extern crate url;
 
-use std::io::Read;
 use std::collections::{HashMap, BTreeMap};
 
 use crypto::sha1::Sha1;
 use crypto::hmac::Hmac;
 use crypto::mac::Mac;
-use hyper::header::{Headers, Authorization, ContentType};
-use hyper::mime::{Mime, TopLevel, SubLevel, Attr, Value};
-use hyper::net::HttpsConnector;
-use hyper_native_tls::NativeTlsClient;
 use rand::Rng;
 use url::Url;
-use url::percent_encoding::{EncodeSet, percent_encode};
-
-#[derive(Copy, Clone)]
-struct StrictEncodeSet;
-
-impl EncodeSet for StrictEncodeSet {
-    fn contains(&self, byte: u8) -> bool {
-        !((byte >= "0".as_bytes()[0] && byte <= "9".as_bytes()[0]) ||
-            (byte >= "a".as_bytes()[0] && byte <= "z".as_bytes()[0]) ||
-            (byte >= "A".as_bytes()[0] && byte <= "Z".as_bytes()[0]) ||
-            (byte == "-".as_bytes()[0]) ||
-            (byte == ".".as_bytes()[0]) ||
-            (byte == "_".as_bytes()[0]) ||
-            (byte == "~".as_bytes()[0])
-        )
-    }
-}
+use url::form_urlencoded;
 
 #[derive(Clone, Debug)]
 pub struct Client {
@@ -92,17 +70,12 @@ impl Client {
 
         let (header, body) = build_request(&self, "POST", &url, param, &token_secret);
 
-        let mut headers = Headers::new();
-        headers.set(Authorization(header));
-        headers.set(ContentType(Mime(TopLevel::Application, SubLevel::WwwFormUrlEncoded, vec![(Attr::Charset, Value::Utf8)])));
-        let client = hyper::Client::with_connector(HttpsConnector::new(NativeTlsClient::new().unwrap()));
-        let mut res = client.post(&url)
-            .headers(headers)
-            .body(&body)
-            .send()
-            .unwrap();
-        let mut response_body = String::new();
-        res.read_to_string(&mut response_body).unwrap();
+        let resp = ureq::post(&url)
+                        .set("Authorization", &header)
+                        .set("Content-Type", "application/x-www-form-urlencoded")
+                        .send_string(&body);
+
+        let response_body = resp.into_string().unwrap();
 
         match serde_json::from_str::<serde_json::Value>(&response_body) {
             Ok(json) => json,
@@ -120,15 +93,11 @@ impl Client {
 
         let (header, _) = build_request(&self, "GET", &url, param, &token_secret);
 
-        let mut headers = Headers::new();
-        headers.set(Authorization(header));
-        let client = hyper::Client::with_connector(HttpsConnector::new(NativeTlsClient::new().unwrap()));
-        let mut res = client.get(&url)
-            .headers(headers)
-            .send()
-            .unwrap();
-        let mut response_body = String::new();
-        res.read_to_string(&mut response_body).unwrap();
+        let resp = ureq::get(&url)
+                        .set("Authorization", &header)
+                        .call();
+
+        let response_body = resp.into_string().unwrap();
 
         match serde_json::from_str::<serde_json::Value>(&response_body) {
             Ok(json) => json,
@@ -138,7 +107,7 @@ impl Client {
 }
 
 fn encode(s: &str) -> String {
-    percent_encode(s.as_bytes(), StrictEncodeSet).collect::<String>()
+    form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>()
 }
 
 fn build_request(
@@ -204,19 +173,15 @@ fn build_body(params: &BTreeMap<&str, &str>) -> String {
 }
 
 fn get_token(url: &str, header_value: &str) -> String {
-    let client = hyper::Client::with_connector(HttpsConnector::new(NativeTlsClient::new().unwrap()));
-    let mut headers = Headers::new();
-    headers.set(Authorization(header_value.to_string()));
-    let mut res = client
-        .post(url)
-        .headers(headers)
-        .send()
-        .unwrap();
+    let resp = ureq::post(&url)
+                    .set("Authorization", header_value)
+                    .call();
 
-    let mut body = String::new();
-    res.read_to_string(&mut body).unwrap();
+    let response_body = resp.into_string().unwrap();
 
-    body
+    println!("{}", &response_body);
+
+    response_body
 }
 
 fn get_request_token(oauth: &Client) -> Result<(String, String), String> {
